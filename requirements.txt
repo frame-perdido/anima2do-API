@@ -2,3 +2,5 @@ fastapi==0.115.0
 uvicorn==0.30.6
 httpx[http2]==0.28.1
 playwright==1.54.0
+playwright-stealth==1.0.6
+patchright==1.54.0
