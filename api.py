@@ -11,7 +11,9 @@ import time
 from typing import Optional
 from urllib.parse import urlparse, urljoin
 
-from playwright.async_api import async_playwright
+# ⚠️ CAMBIO CLAVE: patchright en lugar de playwright
+from patchright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 
 # ============================================================
@@ -28,7 +30,7 @@ logger = logging.getLogger("uvicorn.error")
 app = FastAPI(
     title="Danimados API",
     description="API para catálogo, servidores y detección HLS",
-    version="2.2.0",
+    version="2.3.0",
 )
 
 
@@ -53,9 +55,9 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "es-MX,es;q=0.9",
+    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
 }
 
 
@@ -86,21 +88,20 @@ NOMBRES = {
 # CONCURRENCIA
 # ============================================================
 
-# Render free tier = 512MB RAM. Chromium = ~350MB.
-# Limitamos a 1 browser concurrente para no morir por OOM.
 BROWSER_LOCK = asyncio.Semaphore(1)
 
 
 # ============================================================
-# CACHÉ DE EXTRACCIONES
+# CACHÉ
 # ============================================================
 
-CACHE = {}          # {embed_url: (timestamp, resultado)}
-CACHE_TTL = 3600    # 1 hora
+CACHE = {}
+CACHE_TTL = 3600
 
 
 # ============================================================
-# STEALTH SCRIPT
+# STEALTH SCRIPT EXTRA
+# (playwright-stealth ya hace mucho, pero añadimos lo nuestro)
 # ============================================================
 
 STEALTH_SCRIPT = """
@@ -171,8 +172,9 @@ def construir_headers_proxy(referer: str = "") -> dict:
 async def read_root():
     return {
         "message": "Danimados API está funcionando",
-        "version": "2.2.0",
-        "playwright": True,
+        "version": "2.3.0",
+        "playwright": "patchright",
+        "stealth": True,
         "hls_resolver": True,
         "proxy": True,
     }
@@ -369,6 +371,8 @@ async def get_servers(episode_url: str):
                         headers={
                             **HEADERS,
                             "X-Requested-With": "XMLHttpRequest",
+                            "Referer": episode_url,
+                            "Origin": "https://danimados.cc",
                         },
                     )
                     if ajax_response.status_code != 200:
@@ -410,7 +414,6 @@ async def resolve_player(embed_url: str, wait: int = 20):
     if not embed_url.startswith(("http://", "https://")):
         raise HTTPException(400, "embed_url no es una URL válida")
 
-    # Caché
     ahora = time.time()
     if embed_url in CACHE:
         ts, data = CACHE[embed_url]
@@ -452,6 +455,9 @@ async def resolve_player(embed_url: str, wait: int = 20):
             await context.add_init_script(STEALTH_SCRIPT)
 
             page = await context.new_page()
+
+            # ⚠️ APLICAR STEALTH
+            await stealth_async(page)
 
             async def bloquear(route):
                 tipo = route.request.resource_type
@@ -570,6 +576,7 @@ async def resolve_player_debug(embed_url: str, wait: int = 20):
             await context.add_init_script(STEALTH_SCRIPT)
 
             page = await context.new_page()
+            await stealth_async(page)
 
             def registrar_request(request):
                 url = request.url
@@ -608,7 +615,7 @@ async def resolve_player_debug(embed_url: str, wait: int = 20):
 
 
 # ============================================================
-# PROXY BINARIO (segmentos .ts, .m4s, .mp4)
+# PROXY BINARIO
 # ============================================================
 
 @app.get("/proxy")
@@ -664,12 +671,6 @@ async def proxy_video(url: str, referer: str = ""):
 # ============================================================
 
 def reescribir_m3u8(contenido: str, base_url: str, referer: str) -> str:
-    """
-    Reescribe un manifiesto m3u8 para que:
-    - Las líneas que terminan en .m3u8 apunten a /proxy_m3u8
-    - Las líneas que terminan en .ts/.m4s/.aac apunten a /proxy
-    - Las líneas #EXT... se dejen intactas
-    """
 
     lineas_salida = []
 
@@ -677,26 +678,22 @@ def reescribir_m3u8(contenido: str, base_url: str, referer: str) -> str:
 
         stripped = linea.strip()
 
-        # Líneas vacías o comentarios → dejar igual
         if not stripped or stripped.startswith("#"):
             lineas_salida.append(linea)
             continue
 
-        # Es una URL (absoluta o relativa)
         url_abs = urljoin(base_url, stripped)
-
         lower = url_abs.lower()
+
+        ref_enc = referer if referer else ""
 
         if ".m3u8" in lower:
             proxied = (
-                f"/proxy_m3u8?url={httpx.URL(url_abs)}"
-                f"&referer={httpx.URL(referer) if referer else ''}"
+                f"/proxy_m3u8?url={url_abs}&referer={ref_enc}"
             )
         else:
-            # segmento (.ts, .m4s, .aac, etc.)
             proxied = (
-                f"/proxy?url={httpx.URL(url_abs)}"
-                f"&referer={httpx.URL(referer) if referer else ''}"
+                f"/proxy?url={url_abs}&referer={ref_enc}"
             )
 
         lineas_salida.append(proxied)
@@ -726,7 +723,6 @@ async def proxy_m3u8(url: str, referer: str = ""):
 
             contenido = response.text
 
-            # Si no es un m3u8, devolverlo tal cual
             if "#EXTM3U" not in contenido:
                 return Response(
                     content=contenido,
@@ -734,8 +730,7 @@ async def proxy_m3u8(url: str, referer: str = ""):
                     headers={"Access-Control-Allow-Origin": "*"},
                 )
 
-            # Reescribir
-            base_url = str(response.url)  # por si hubo redirects
+            base_url = str(response.url)
             reescrito = reescribir_m3u8(contenido, base_url, referer)
 
             return Response(
@@ -760,7 +755,7 @@ async def health():
     return {
         "status": "ok",
         "service": "danimados-api",
-        "version": "2.2.0",
+        "version": "2.3.0",
     }
 
 
@@ -775,7 +770,11 @@ async def health_playwright():
                 )
                 version = browser.version
                 await browser.close()
-                return {"status": "ok", "chromium": version}
+                return {
+                    "status": "ok",
+                    "engine": "patchright",
+                    "chromium": version,
+                }
     except Exception as e:
         logger.error(f"[health/playwright] {e}")
         raise HTTPException(500, f"Chromium no arranca: {str(e)}")
