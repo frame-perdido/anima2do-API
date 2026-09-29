@@ -40,7 +40,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# patchright instala su propio Chromium (fork anti-detección)
+# patchright instala su propio Chromium
 RUN patchright install chromium
 
 COPY . .
