@@ -297,7 +297,19 @@ async def get_seasons(serie_slug: str):
                 raise HTTPException(
                     status_code=404, detail="Temporadas no encontradas"
                 )
-            return response.json()
+
+            temporadas = response.json()
+
+            # FILTRO: solo devolver temporadas cuyo slug empiece con
+            # "{serie_slug}-temporada-"
+            prefijo = f"{serie_slug}-temporada-"
+            filtradas = [
+                t for t in temporadas
+                if t.get("slug", "").startswith(prefijo)
+            ]
+
+            return filtradas
+
     except httpx.RequestError as e:
         raise HTTPException(
             status_code=502,
