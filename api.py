@@ -101,7 +101,6 @@ CACHE_TTL = 3600
 
 # ============================================================
 # STEALTH SCRIPT EXTRA
-# (playwright-stealth ya hace mucho, pero añadimos lo nuestro)
 # ============================================================
 
 STEALTH_SCRIPT = """
@@ -336,7 +335,14 @@ async def get_episodes(season_url: str):
                 r'href=["\']([^"\']+)["\']', response.text
             )
             enlaces = list(dict.fromkeys(enlaces))
-            return {"season_url": season_url, "episodes": enlaces}
+
+            # FILTRO: solo enlaces que apunten a /episodios/
+            episodios = [
+                e for e in enlaces
+                if "/episodios/" in e
+            ]
+
+            return {"season_url": season_url, "episodes": episodios}
     except httpx.RequestError as e:
         raise HTTPException(
             status_code=502,
@@ -468,7 +474,6 @@ async def resolve_player(embed_url: str, wait: int = 20):
 
             page = await context.new_page()
 
-            # ⚠️ APLICAR STEALTH
             await stealth_async(page)
 
             async def bloquear(route):
@@ -507,7 +512,6 @@ async def resolve_player(embed_url: str, wait: int = 20):
                     timeout=30000,
                 )
 
-                # Espera activa
                 elapsed = 0
                 step = 2
                 while elapsed < wait and not hls_urls:
