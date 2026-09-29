@@ -163,6 +163,28 @@ def construir_headers_proxy(referer: str = "") -> dict:
     return headers
 
 
+async def resolver_cover(client: httpx.AsyncClient, serie: dict) -> None:
+    """Resuelve el cover de una serie y lo añade como cover_image."""
+    featured_id = serie.get("featured_media")
+    if not featured_id:
+        return
+    try:
+        r = await client.get(
+            f"https://danimados.cc/wp-json/wp/v2/media/{featured_id}"
+        )
+        if r.status_code == 200:
+            media = r.json()
+            source_url = media.get("source_url", "")
+            if source_url:
+                serie["cover_image"] = {
+                    "large": source_url,
+                    "medium": source_url,
+                    "thumbnail": source_url,
+                }
+    except Exception:
+        pass
+
+
 # ============================================================
 # ROOT
 # ============================================================
@@ -180,7 +202,7 @@ async def read_root():
 
 
 # ============================================================
-# CATALOGO
+# CATALOGO (con cover resuelto)
 # ============================================================
 
 @app.get("/catalog")
@@ -199,7 +221,7 @@ async def get_catalog(
 
     try:
         async with httpx.AsyncClient(
-            headers=HEADERS, timeout=20, follow_redirects=True
+            headers=HEADERS, timeout=30, follow_redirects=True
         ) as client:
             response = await client.get(
                 "https://danimados.cc/wp-json/wp/v2/tvshows",
@@ -210,11 +232,19 @@ async def get_catalog(
                     status_code=response.status_code,
                     detail="Error al obtener el catálogo",
                 )
+
+            results = response.json()
+
+            # Resolver covers en paralelo
+            await asyncio.gather(
+                *[resolver_cover(client, s) for s in results]
+            )
+
             return {
                 "total": response.headers.get("x-wp-total"),
                 "total_pages": response.headers.get("x-wp-totalpages"),
                 "page": page,
-                "results": response.json(),
+                "results": results,
             }
     except httpx.RequestError as e:
         raise HTTPException(
@@ -254,7 +284,7 @@ async def get_years():
 
 
 # ============================================================
-# SERIE
+# SERIE (con cover resuelto)
 # ============================================================
 
 @app.get("/series/{serie_id}")
@@ -270,7 +300,13 @@ async def get_serie(serie_id: int):
                 raise HTTPException(
                     status_code=404, detail="Serie no encontrada"
                 )
-            return response.json()
+
+            serie = response.json()
+
+            # Resolver cover
+            await resolver_cover(client, serie)
+
+            return serie
     except httpx.RequestError as e:
         raise HTTPException(
             status_code=502,
