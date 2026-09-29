@@ -40,10 +40,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Playwright instala Chromium para playwright normal
-RUN playwright install chromium
-
-# Patchright necesita SU PROPIO Chromium (fork con parches anti-detección)
+# patchright instala su propio Chromium (fork anti-detección)
 RUN patchright install chromium
 
 COPY . .
