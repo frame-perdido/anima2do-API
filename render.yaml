@@ -2,7 +2,7 @@ services:
   - type: web
     name: danimados-api
     env: docker
-    plan: free
+    plan: starter
     region: oregon
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
@@ -12,3 +12,5 @@ services:
         value: 8000
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
